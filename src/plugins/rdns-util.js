@@ -9,6 +9,7 @@ import { rbase32 } from "../commons/b32.js";
 import * as util from "../commons/util.js";
 import * as bufutil from "../commons/bufutil.js";
 import * as dnsutil from "../commons/dnsutil.js";
+import * as envutil from "../commons/envutil.js";
 
 // doh uses b64url encoded blockstamp, while dot uses lowercase b32.
 const _b64delim = ":";
@@ -18,10 +19,6 @@ const _b32delim = "-";
 const _wildcardUint16 = new Uint16Array([
   64544, 18431, 8191, 65535, 64640, 1, 128, 16320,
 ]);
-
-export function wildcards() {
-  return _wildcardUint16;
-}
 
 export function isBlocklistFilterSetup(blf) {
   return blf && !util.emptyObj(blf.ftrie);
@@ -87,6 +84,8 @@ export function rdnsBlockResponse(
 //               {string(sub/domain-name) : string(blocklist-stamp) }
 // FIXME: return block-dnspacket depending on altsvc/https/svcb or cname/a/aaaa
 export function doBlock(dn, userBlInfo, dnBlInfo) {
+  const blockSubdomains = envutil.blockSubdomains();
+  const version = userBlInfo.flagVersion;
   const noblock = rdnsNoBlockResponse();
   if (
     util.emptyString(dn) ||
@@ -96,27 +95,31 @@ export function doBlock(dn, userBlInfo, dnBlInfo) {
     return noblock;
   }
 
+  // treat every blocklist as a wildcard blocklist
+  if (blockSubdomains) {
+    return applyWildcardBlocklists(
+      userBlInfo.userBlocklistFlagUint,
+      version,
+      dnBlInfo,
+      dn
+    );
+  }
+
   const dnUint = new Uint16Array(dnBlInfo[dn]);
-
+  // if the domain isn't in block-info, we're done
   if (util.emptyArray(dnUint)) return noblock;
-
-  const r = applyBlocklists(
-    userBlInfo.userBlocklistFlagUint,
-    dnUint,
-    userBlInfo.flagVersion
-  );
+  // else, determine if user selected blocklist intersect with the domain's
+  const r = applyBlocklists(userBlInfo.userBlocklistFlagUint, dnUint, version);
 
   // if response is blocked, we're done
   if (r.isBlocked) return r;
-
-  // TODO: treat every list as a wildcard list?
   // if user-blockstamp doesn't contain any wildcard blocklists, we're done
   if (util.emptyArray(userBlInfo.userServiceListUint)) return r;
 
   // check if any subdomain is in blocklists that is also in user-blockstamp
   return applyWildcardBlocklists(
     userBlInfo.userServiceListUint,
-    userBlInfo.flagVersion,
+    version,
     dnBlInfo,
     dn
   );
@@ -157,7 +160,9 @@ function applyWildcardBlocklists(uint1, flagVersion, dnBlInfo, dn) {
 
   // iterate through all subdomains one by one, for ex: a.b.c.ex.com:
   // 1st: a.b.c.ex.com; 2nd: b.c.ex.com; 3rd: c.ex.com; 4th: ex.com; 5th: .com
-  while (dnSplit.shift() !== undefined) {
+  do {
+    if (util.emptyArray(dnSplit)) break;
+
     const subdomain = dnSplit.join(".");
     const subdomainUint = dnBlInfo[subdomain];
 
@@ -170,7 +175,7 @@ function applyWildcardBlocklists(uint1, flagVersion, dnBlInfo, dn) {
     if (!util.emptyObj(response) && response.isBlocked) {
       return response;
     }
-  }
+  } while (dnSplit.shift() != null);
 
   return rdnsNoBlockResponse();
 }
@@ -380,4 +385,24 @@ export function hasBlockstamp(blockInfo) {
     !util.emptyObj(blockInfo) &&
     !util.emptyArray(blockInfo.userBlocklistFlagUint)
   );
+}
+
+// returns true if tstamp is of form yyyy/epochMs
+function isValidFullTimestamp(tstamp) {
+  if (typeof tstamp !== "string") return false;
+  return tstamp.indexOf("/") === 4;
+}
+
+// from: github.com/celzero/downloads/blob/main/src/timestamp.js
+export function bareTimestampFrom(tstamp) {
+  // strip out "/" if tstamp is of form yyyy/epochMs
+  if (isValidFullTimestamp(tstamp)) {
+    tstamp = tstamp.split("/")[1];
+  }
+  const t = parseInt(tstamp);
+  if (isNaN(t)) {
+    log.w("Rdns bareTstamp: NaN", tstamp);
+    return 0;
+  }
+  return t;
 }

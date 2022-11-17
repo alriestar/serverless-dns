@@ -6,10 +6,10 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import { TrieCache } from "./trie-cache.js";
 import { createTrie } from "@serverless-dns/trie/ftrie.js";
 import { BlocklistFilter } from "./filter.js";
 import { withDefaults } from "./trie-config.js";
+import * as cfg from "../../core/cfg.js";
 import * as bufutil from "../../commons/bufutil.js";
 import * as util from "../../commons/util.js";
 import * as envutil from "../../commons/envutil.js";
@@ -23,6 +23,7 @@ export class BlocklistWrapper {
     this.exceptionFrom = "";
     this.exceptionStack = "";
     this.noop = envutil.disableBlocklists();
+    this.nowait = envutil.bgDownloadBlocklistWrapper();
 
     this.log = log.withTags("BlocklistWrapper");
 
@@ -45,14 +46,16 @@ export class BlocklistWrapper {
         now - this.startTime > envutil.downloadTimeout() * 2
       ) {
         this.log.i(rxid, "download blocklists", now, this.startTime);
-        return this.initBlocklistConstruction(
-          rxid,
-          now,
-          envutil.blocklistUrl(),
-          envutil.timestamp(),
-          envutil.tdNodeCount(),
-          envutil.tdParts()
-        );
+        const url = envutil.blocklistUrl() + cfg.timestamp() + "/";
+        const nc = cfg.tdNodeCount();
+        const parts = cfg.tdParts();
+        const u6 = cfg.tdCodec6();
+        return this.initBlocklistConstruction(rxid, now, url, nc, parts, u6);
+      } else if (this.nowait) {
+        // blocklist-construction is in progress, but we don't have to
+        // wait for it to finish. So, return an empty response.
+        this.log.i(rxid, "nowait, but blocklist construction ongoing");
+        return util.emptyResponse();
       } else {
         // someone's constructing... wait till finished
         return this.waitUntilDone();
@@ -112,16 +115,16 @@ export class BlocklistWrapper {
   }
 
   makeTrie(tdbuf, rdbuf, bconfig) {
-    return createTrie(tdbuf, rdbuf, bconfig, new TrieCache());
+    return createTrie(tdbuf, rdbuf, bconfig);
   }
 
   async initBlocklistConstruction(
     rxid,
     when,
-    blocklistUrl,
-    latestTimestamp,
+    url,
     tdNodecount,
-    tdParts
+    tdParts,
+    tdCodec6
   ) {
     this.isBlocklistUnderConstruction = true;
     this.startTime = when;
@@ -130,13 +133,13 @@ export class BlocklistWrapper {
     try {
       await this.downloadAndBuildBlocklistFilter(
         rxid,
-        blocklistUrl,
-        latestTimestamp,
+        url,
         tdNodecount,
-        tdParts
+        tdParts,
+        tdCodec6
       );
 
-      this.log.i(rxid, "blocklist-filter setup");
+      this.log.i(rxid, "blocklist-filter setup; u6?", tdCodec6);
       if (false) {
         // test
         const result = this.blocklistFilter.blockstamp("google.com");
@@ -145,7 +148,7 @@ export class BlocklistWrapper {
 
       response.data.blocklistFilter = this.blocklistFilter;
     } catch (e) {
-      this.log.e(rxid, "initBlocklistConstruction", e.stack);
+      this.log.e(rxid, "initBlocklistConstruction", e);
       response = util.errResponse("initBlocklistConstruction", e);
       this.exceptionFrom = response.exceptionFrom;
       this.exceptionStack = response.exceptionStack;
@@ -156,41 +159,39 @@ export class BlocklistWrapper {
     return response;
   }
 
-  async downloadAndBuildBlocklistFilter(
-    rxid,
-    blocklistUrl,
-    latestTimestamp,
-    tdNodecount,
-    tdParts
-  ) {
+  async downloadAndBuildBlocklistFilter(rxid, url, tdNodecount, tdParts, u6) {
     !tdNodecount && this.log.e(rxid, "tdNodecount zero or missing!");
 
-    const baseurl = blocklistUrl + latestTimestamp;
-    let bconfig = {
-      nodecount: tdNodecount || -1,
-      tdparts: tdParts || -1,
-    };
+    const bconfig = withDefaults(cfg.orig());
 
-    bconfig = withDefaults(bconfig);
+    if (
+      bconfig.useCodec6 !== u6 ||
+      bconfig.nodecount !== tdNodecount ||
+      bconfig.tdparts !== tdParts
+    ) {
+      throw new Error(bconfig + "<=cfg; in=>" + u6 + " " + tdNodecount);
+    }
 
-    this.log.d(rxid, blocklistUrl, latestTimestamp, tdNodecount, tdParts);
+    url += bconfig.useCodec6 ? "u6/" : "u8/";
+
+    this.log.d(rxid, url, tdNodecount, tdParts);
     // filetag is fetched as application/octet-stream and so,
     // the response api complains it is unsafe to .json() it:
-    // Called .text() on an HTTP body which does not appear to be
-    // text. The body's Content-Type is "application/octet-stream".
+    // "Called .text() on an HTTP body which does not appear to be
+    // text. The body's Content-Type is 'application/octet-stream'.
     // The result will probably be corrupted. Consider checking the
-    // Content-Type header before interpreting entities as text.
-    const buf0 = fileFetch(baseurl + "/filetag.json", "json");
-    const buf1 = makeTd(baseurl, bconfig.tdparts);
-    const buf2 = fileFetch(baseurl + "/rd.txt", "buffer");
+    // Content-Type header before interpreting entities as text."
+    const buf0 = fileFetch(url + "filetag.json", "json");
+    const buf2 = fileFetch(url + "rd.txt", "buffer");
+    const buf1 = makeTd(url, bconfig.tdparts);
 
     const downloads = await Promise.all([buf0, buf1, buf2]);
 
     this.log.i(rxid, "d:trie w/ config", bconfig);
 
-    const td = downloads[1];
-    const rd = downloads[2];
     const ft = downloads[0];
+    const rd = downloads[2];
+    const td = downloads[1];
 
     const ftrie = this.makeTrie(td, rd, bconfig);
 
@@ -230,7 +231,19 @@ async function fileFetch(url, typ) {
   let res = { ok: false };
   try {
     log.i("downloading", url, typ);
-    res = await fetch(url, { cf: { cacheTtl: /* 2w */ 1209600 } });
+    // Note: cacheEverything is needed as Cloudflare does not
+    // cache .txt and .json blobs, even when a cacheTtl is specified.
+    // ref: developers.cloudflare.com/cache/about/default-cache-behavior
+    // cacheEverything overrides that behaviour and forces Cloudflare to
+    // cache the blob regardless of the extension. In addition, CacheRules
+    // are also enabled on all 3 origins viz cf / dist / cfstore
+    // docs: developers.cloudflare.com/cache/about/cache-rules
+    res = await fetch(url, {
+      cf: {
+        cacheTtl: /* 30d */ 2592000,
+        cacheEverything: true,
+      },
+    });
   } catch (ex) {
     log.w("download failed", url, ex, ex.cause);
     throw ex;
@@ -253,7 +266,7 @@ async function makeTd(baseurl, n) {
   log.i("makeTd from tdParts", n);
 
   if (n <= -1) {
-    return fileFetch(baseurl + "/td.txt", "buffer");
+    return fileFetch(baseurl + "td.txt", "buffer");
   }
 
   const tdpromises = [];
@@ -261,7 +274,7 @@ async function makeTd(baseurl, n) {
     // td00.txt, td01.txt, td02.txt, ... , td98.txt, td100.txt, ...
     const f =
       baseurl +
-      "/td" +
+      "td" +
       i.toLocaleString("en-US", {
         minimumIntegerDigits: 2,
         useGrouping: false,

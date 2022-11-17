@@ -28,7 +28,7 @@ const _maxRequestTimeout = 30000; // 30s
 
 export function dnsaddr() {
   // flydns is always ipv6 (fdaa::53)
-  if (envutil.onFly()) return _dnsFly6;
+  if (envutil.recursive()) return _dnsFly6;
   return _dnsCloudflareSec4;
 }
 
@@ -168,6 +168,17 @@ export function isAnswerHttps(ans) {
     !util.emptyString(ans.type) &&
     (ans.type === "HTTPS" || ans.type === "SVCB")
   );
+}
+
+export function isAnswerQuad0(packet) {
+  if (hasAnswers(packet)) {
+    for (const a of packet.answers) {
+      if (a.data === "0.0.0.0" || a.data === "::") {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 export function extractDomains(dnsPacket) {

@@ -78,12 +78,7 @@ const defaults = {
   // url to blocklist files: trie (td), rank-dir (rd), metadata: (filetag)
   CF_BLOCKLIST_URL: {
     type: "string",
-    default: "https://dist.rethinkdns.com/blocklists/",
-  },
-  // blocklist files version
-  CF_LATEST_BLOCKLIST_TIMESTAMP: {
-    type: "string",
-    default: "1662384683026",
+    default: "https://cfstore.rethinkdns.com/blocklists/",
   },
   // primary doh upstream
   CF_DNS_RESOLVER_URL: {
@@ -94,6 +89,12 @@ const defaults = {
   CF_DNS_RESOLVER_URL_2: {
     type: "string",
     default: "https://dns.google/dns-query",
+  },
+  // upstream recursive rethinkdns resolver running on Fly.io
+  MAX_DNS_RESOLVER_URL: {
+    type: "string",
+    // must always end with a trailing slash
+    default: "https://max.rethinkdns.com/",
   },
   // max doh request processing timeout some requests may have to wait
   // for blocklists to download before being responded to.
@@ -106,17 +107,6 @@ const defaults = {
     type: "number",
     default: "5000", // 5s
   },
-  // total nodes in trie (td)
-  TD_NODE_COUNT: {
-    type: "number",
-    default: "42272846",
-  },
-  // trie (td) split-files to download and concat, as of Jan '22,
-  // trie size is ~60MB which is split in to three ~20MBs+ files
-  TD_PARTS: {
-    type: "number",
-    default: "2",
-  },
   // ttl for dns answers, overrides ttls in dns answers
   CACHE_TTL: {
     type: "number",
@@ -126,6 +116,13 @@ const defaults = {
   DISABLE_BLOCKLISTS: {
     type: "boolean",
     default: false,
+  },
+  // treat all blocklists as wildcards, this means
+  // if abc.xyz.com is in any blocklist, then
+  // <*>.abc.xyz.com will also get blocked
+  BLOCK_SUBDOMAINS: {
+    type: "boolean",
+    default: true,
   },
   // run in profiler mode
   PROFILE_DNS_RESOLVES: {
@@ -194,7 +191,6 @@ export default class EnvManager {
    */
   load() {
     this.envMap = this.defaultEnv();
-
     // verbose log:
     // console.debug("env defaults", this.envMap);
   }
@@ -212,7 +208,7 @@ export default class EnvManager {
     // FLY_ALLOC_ID=5778f6b7-3cc2-d011-36b1-dfe057b0dc79 is set on fly-vms
     const hasFlyAllocId = this.get("FLY_ALLOC_ID") != null;
     // github.com/denoland/deploy_feedback/issues/73
-    const hasDenoDeployId = this.get("DENO_DEPLOYMENT_ID") !== undefined;
+    const hasDenoDeployId = this.get("DENO_DEPLOYMENT_ID") != null;
     const hasWorkersUa =
       globalThis.navigator != null
         ? navigator.userAgent === "Cloudflare-Workers"

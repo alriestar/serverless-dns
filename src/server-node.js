@@ -45,7 +45,9 @@ let listeners = [];
 })();
 
 async function systemDown() {
-  log.i(noreqs, "rcv stop signal; uptime", uptime() / 1000, "secs");
+  // system-down even may arrive even before the process has had the chance
+  // to start, in which case globals like env and log may not be available
+  console.info(noreqs, "rcv stop signal; uptime", uptime() / 1000, "secs");
 
   const srvs = listeners;
   listeners = [];
@@ -53,7 +55,7 @@ async function systemDown() {
   srvs.forEach((s) => {
     if (!s) return;
     const saddr = s.address();
-    log.i("stopping...", saddr);
+    console.info("stopping...", saddr);
     // TODO: drain all sockets stackoverflow.com/a/14636625
     s.close(() => down(saddr));
   });
@@ -70,7 +72,7 @@ async function systemDown() {
   // FIXME rid of this delayed-exit once fly.io has health checks in place.
   // refs: community.fly.io/t/7341/6 and community.fly.io/t/7289
   util.timeout(/* 2s*/ 2 * 1000, () => {
-    log.i("game over");
+    console.info("game over");
     // exit success aka 0; ref: community.fly.io/t/4547/6
     process.exit(0);
   });
@@ -151,7 +153,7 @@ function systemUp() {
 }
 
 function down(addr) {
-  log.i(`closed: [${addr.address}]:${addr.port}`);
+  console.info(`closed: [${addr.address}]:${addr.port}`);
 }
 
 function up(server, addr) {
@@ -188,7 +190,7 @@ function serveDoTProxyProto(clientSocket) {
   );
 
   dotSock.on("error", (e) => {
-    log.w("DoT socket error, closing client connection", e);
+    log.w("DoT socket err, close conn", e);
     close(clientSocket);
     close(dotSock);
   });
@@ -292,7 +294,7 @@ function getDnRE(socket) {
 
   const rgDnRE = new RegExp(regExs[0].join("|") || "(?!)", "i");
   const wcDnRE = new RegExp(regExs[1].join("|") || "(?!)", "i");
-  log.d(rgDnRE, wcDnRE);
+  log.i("SNIs: ", rgDnRE, wcDnRE);
   return [rgDnRE, wcDnRE];
 }
 
@@ -329,7 +331,7 @@ function getMetadata(sni) {
 function serveTLS(socket) {
   const sni = socket.servername;
   if (!sni) {
-    log.d("No SNI, closing client connection");
+    log.d("No SNI, close conn");
     close(socket);
     return;
   }
@@ -342,7 +344,7 @@ function serveTLS(socket) {
   const isOurWcDn = OUR_WC_DN_RE.test(sni);
 
   if (!isOurWcDn && !isOurRgDn) {
-    log.w("Not our DNS name, closing client connection");
+    log.w("unexpected SNI, close conn", sni);
     close(socket);
     return;
   }

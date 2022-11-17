@@ -11,6 +11,7 @@ import * as bufutil from "../commons/bufutil.js";
 import * as dnsutil from "../commons/dnsutil.js";
 import * as envutil from "../commons/envutil.js";
 import * as util from "../commons/util.js";
+import IOState from "./io-state.js";
 
 export default class RethinkPlugin {
   /**
@@ -49,6 +50,16 @@ export default class RethinkPlugin {
       false
     );
 
+    // filter out undelegated domains if running recurisve resolver
+    envutil.recursive() &&
+      this.registerPlugin(
+        "prefilter",
+        services.prefilter,
+        ["rxid", "requestDecodedDnsPacket"],
+        this.prefilterCallBack,
+        false
+      );
+
     this.registerPlugin(
       "cacheOnlyResolver",
       services.dnsCacheHandler,
@@ -75,6 +86,7 @@ export default class RethinkPlugin {
         // resolver-url overriden by user-op
         "userDnsResolverUrl",
         "userBlocklistInfo",
+        "userBlockstamp",
         "domainBlockstamp",
         "requestDecodedDnsPacket",
         "requestBodyBuffer",
@@ -149,8 +161,9 @@ export default class RethinkPlugin {
   }
 
   /**
-   * Adds "userBlocklistInfo" and "dnsResolverUrl" to RethinkPlugin params
-   * @param {*} response - Contains `data` which is `userBlocklistInfo`
+   * Adds "userBlocklistInfo", "userBlocklistInfo",  and "dnsResolverUrl"
+   * to RethinkPlugin params.
+   * @param {*} response - Contains data: userBlocklistInfo / userBlockstamp
    * @param {*} io
    */
   async userOpCallback(response, io) {
@@ -165,11 +178,35 @@ export default class RethinkPlugin {
       // r.userBlocklistInfo and r.dnsResolverUrl may be "null"
       const bi = r.userBlocklistInfo;
       const rr = r.dnsResolverUrl;
-      this.log.d(rxid, "set user:blockInfo/resolver", bi, rr);
+      // may be empty string; usually of form "v:base64" or "v-base32"
+      const bs = r.userBlocklistFlag;
+      this.log.d(rxid, "set user:blockInfo/resolver/stamp", bi, rr, bs);
       this.registerParameter("userBlocklistInfo", bi);
+      this.registerParameter("userBlockstamp", bs);
       this.registerParameter("userDnsResolverUrl", rr);
     } else {
       this.log.i(rxid, "user-op is a no-op, possibly a command-control req");
+    }
+  }
+
+  /**
+   * @param {Response} response
+   * @param {IOState} io
+   */
+  prefilterCallBack(response, io) {
+    const rxid = this.parameter.get("rxid");
+    const r = response.data;
+    const deny = r.isBlocked;
+    const err = response.isException;
+    this.log.d(rxid, "prefilter deny?", deny, "err?", err);
+
+    if (err) {
+      this.log.w(rxid, "prefilter: error", r);
+      this.loadException(rxid, response, io);
+    } else if (deny) {
+      io.dnsNxDomainResponse(r.flag);
+    } else {
+      this.log.d(rxid, "prefilter no-op");
     }
   }
 
@@ -200,8 +237,8 @@ export default class RethinkPlugin {
   /**
    * Adds "responseBodyBuffer" (arrayBuffer of dns response from upstream
    * resolver) to RethinkPlugin params
-   * @param {*} response
-   * @param {*} io
+   * @param {Response} response
+   * @param {IOState} io
    */
   dnsResolverCallBack(response, io) {
     const rxid = this.parameter.get("rxid");
@@ -227,11 +264,21 @@ export default class RethinkPlugin {
     }
   }
 
+  /**
+   *
+   * @param {String} rxid
+   * @param {Response} response
+   * @param {IOState} io
+   */
   loadException(rxid, response, io) {
     this.log.e(rxid, "exception", JSON.stringify(response));
     io.dnsExceptionResponse(response);
   }
 
+  /**
+   * @param {IOState} io
+   * @returns
+   */
   async initIoState(io) {
     this.io = io;
 

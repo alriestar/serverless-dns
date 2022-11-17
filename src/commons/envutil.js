@@ -82,24 +82,14 @@ export function downloadTimeout(missing = 0) {
   return envManager.get("CF_BLOCKLIST_DOWNLOAD_TIMEOUT") || missing;
 }
 
+export function bgDownloadBlocklistWrapper() {
+  if (!envManager) return false;
+  return onCloudflare();
+}
+
 export function blocklistUrl() {
   if (!envManager) return null;
   return envManager.get("CF_BLOCKLIST_URL");
-}
-
-export function timestamp() {
-  if (!envManager) return null;
-  return envManager.get("CF_LATEST_BLOCKLIST_TIMESTAMP");
-}
-
-export function tdNodeCount() {
-  if (!envManager) return null;
-  return envManager.get("TD_NODE_COUNT");
-}
-
-export function tdParts() {
-  if (!envManager) return null;
-  return envManager.get("TD_PARTS");
 }
 
 export function primaryDohResolver() {
@@ -112,6 +102,11 @@ export function secondaryDohResolver() {
   if (!envManager) return null;
 
   return envManager.get("CF_DNS_RESOLVER_URL_2");
+}
+
+export function maxDohUrl() {
+  if (!envManager) return null;
+  return envManager.get("MAX_DNS_RESOLVER_URL");
 }
 
 export function dohResolvers() {
@@ -231,6 +226,17 @@ export function disableBlocklists() {
   if (blocklistDownloadOnly()) return false;
 
   return envManager.get("DISABLE_BLOCKLISTS") || false;
+}
+
+export function blockSubdomains() {
+  if (!envManager) return true;
+
+  return envManager.get("BLOCK_SUBDOMAINS") || true;
+}
+
+// recurisve resolver on Fly
+export function recursive() {
+  return onFly();
 }
 
 export function gwip4() {
