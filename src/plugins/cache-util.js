@@ -5,10 +5,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
-import * as cfg from "../core/cfg.js";
-import * as util from "../commons/util.js";
 import * as dnsutil from "../commons/dnsutil.js";
 import * as envutil from "../commons/envutil.js";
+import * as util from "../commons/util.js";
 import * as pres from "./plugin-response.js";
 
 const minTtlSec = 30; // 30s
@@ -118,7 +117,7 @@ function updateTtl(packet, end) {
   }
 }
 
-function makeId(packet) {
+export function makeId(packet) {
   // multiple questions are kind of an undefined behaviour
   // stackoverflow.com/a/55093896
   if (!dnsutil.hasSingleQuestion(packet)) return null;
@@ -164,13 +163,15 @@ export function makeHttpCacheValue(data) {
 
 /**
  * @param {any} packet
+ * @param {ts} string
  * @returns {URL}
  */
-export function makeHttpCacheKey(packet) {
+export function makeHttpCacheKey(packet, ts) {
   const id = makeId(packet); // ex: domain.tld:A:dnssec
   if (util.emptyString(id)) return null;
+  if (util.emptyString(ts)) ts = util.yyyymm();
 
-  return new URL(_cacheurl + cfg.timestamp() + "/" + id);
+  return new URL(_cacheurl + ts + "/" + id);
 }
 
 /**

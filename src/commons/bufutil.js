@@ -52,7 +52,7 @@ export function hex(b) {
  */
 export function len(b) {
   if (emptyBuf(b)) return 0;
-  return b.byteLength;
+  return b.byteLength || 0;
 }
 
 export function bytesToBase64Url(b) {
@@ -112,11 +112,19 @@ export function decodeFromBinaryArray(b) {
   return decodeFromBinary(b, u8);
 }
 
+/**
+ * @param {ArrayBufferLike} b
+ * @returns {boolean}
+ */
 export function emptyBuf(b) {
   return !b || b.byteLength <= 0;
 }
 
-// returns underlying buffer prop when b is TypedArray or node:Buffer
+/**
+ * Returns underlying buffer prop when b is TypedArray or node:Buffer
+ * @param {Uint8Array|Buffer} b
+ * @returns {ArrayBufferLike}
+ */
 export function raw(b) {
   if (!b || b.buffer == null) b = ZERO;
 
@@ -169,11 +177,19 @@ export function bufferOf(arrayBuf) {
   return Buffer.from(new Uint8Array(arrayBuf));
 }
 
+/**
+ * @param {Buffer} b
+ * @returns {int}
+ */
 export function recycleBuffer(b) {
   b.fill(0);
   return 0;
 }
 
+/**
+ * @param {int} size
+ * @returns {Buffer}
+ */
 export function createBuffer(size) {
   return Buffer.allocUnsafe(size);
 }

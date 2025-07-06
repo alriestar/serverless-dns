@@ -6,11 +6,11 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import RethinkPlugin from "./plugin.js";
-import * as pres from "../plugins/plugin-response.js";
-import * as util from "../commons/util.js";
 import * as dnsutil from "../commons/dnsutil.js";
+import * as util from "../commons/util.js";
+import * as pres from "../plugins/plugin-response.js";
 import IOState from "./io-state.js";
+import RethinkPlugin from "./plugin.js";
 
 // TODO: define FetchEventLike
 /**
@@ -45,9 +45,9 @@ async function proxyRequest(event) {
     }
 
     await util.timedSafeAsyncOp(
-      /* op*/ async () => plugin.execute(),
+      /* op*/ () => plugin.execute(),
       /* waitMs*/ dnsutil.requestTimeout(),
-      /* onTimeout*/ async () => errorResponse(io)
+      /* onTimeout*/ () => Promise.resolve(errorResponse(io))
     );
   } catch (err) {
     log.e("doh", "proxy-request error", err.stack);
@@ -61,11 +61,20 @@ function optionsRequest(request) {
   return request.method === "OPTIONS";
 }
 
+/**
+ * @param {IOState} io
+ * @param {Error} err
+ */
 function errorResponse(io, err = null) {
   const eres = pres.errResponse("doh.js", err);
   io.dnsExceptionResponse(eres);
 }
 
+/**
+ * @param {IOState} io
+ * @param {string} ua
+ * @returns {Response}
+ */
 function withCors(io, ua) {
   if (util.fromBrowser(ua)) io.setCorsHeadersIfNeeded();
   return io.httpResponse;
